@@ -1,5 +1,5 @@
 """
-IRS Copilot — FastAPI Backend
+Taxapp — FastAPI Backend
 
 Exposes the RAG chatbot as a streaming SSE API so any frontend can consume it.
 
@@ -42,7 +42,7 @@ DEFAULT_ANTHROPIC_MODELS = [
     "claude-3-5-sonnet-latest",
 ]
 
-SYSTEM_PROMPT = """You are an expert US tax CPA assistant ("IRS Copilot") with deep knowledge \
+SYSTEM_PROMPT = """You are an expert US tax CPA assistant ("Taxapp") with deep knowledge \
 of 2025 IRS forms, instructions, publications, and tax law. You only answer tax-related questions.
 
 Rules:
@@ -67,7 +67,7 @@ load_dotenv(REPO_ROOT / ".env")
 load_dotenv(SCRIPT_DIR / ".env")
 
 
-app = FastAPI(title="IRS Copilot API", version="1.0.0")
+app = FastAPI(title="Taxapp API", version="1.0.0")
 
 app.add_middleware(
     CORSMiddleware,
