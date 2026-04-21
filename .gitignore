@@ -1,18 +1,9 @@
 .DS_Store
 .env
-.gpthiddenkey
-.gpthiddenkey2
 __pycache__
 testing
-.gpthiddenkey-kike
-.gpthiddenkey-mariano
-.gpthiddenkey-irscopilot
-.claude
+# .claude
 do_not_commit
 chroma_db
 irs_forms
-node_modules
-.next
 out
-*.tsbuildinfo
-next-env.d.ts
