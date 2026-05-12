@@ -16,10 +16,10 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app import config  # noqa: F401  — import side effects: load `.env` files
-from app.logging_utils import install_access_log_middleware, setup_logging
+from app.api import router
 from app.rag.llm import get_candidate_models
 from app.rag.vectorstore import warmup_collection
-from app.web.routes import router
+from app.utils.logger import install_access_log_middleware, setup_logging
 
 setup_logging()
 logger = logging.getLogger("taxapp.api")
