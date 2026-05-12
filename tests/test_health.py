@@ -1,4 +1,4 @@
-"""Tests for the `GET /api/health` endpoint in `app/web/routes.py`."""
+"""Tests for the `GET /api/health` endpoint in `app/api/v0/health.py`."""
 
 from tests.conftest import FakeCollection, make_app
 

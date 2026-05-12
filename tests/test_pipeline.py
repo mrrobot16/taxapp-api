@@ -3,7 +3,7 @@
 import anthropic
 import pytest
 
-from app.config import MAX_HISTORY, MIN_CONTEXT_SCORE
+from app.constants import MAX_HISTORY, MIN_CONTEXT_SCORE
 from app.rag.pipeline import stream_chat_pipeline
 from app.schemas import ChatRequest, HistoryMessage
 from tests.conftest import (

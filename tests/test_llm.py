@@ -2,7 +2,7 @@
 
 import anthropic
 
-from app.config import DEFAULT_ANTHROPIC_MODELS
+from app.constants import DEFAULT_ANTHROPIC_MODELS
 from app.rag.llm import get_candidate_models, is_model_access_error
 from tests.conftest import make_anthropic_error
 

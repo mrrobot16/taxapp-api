@@ -1,16 +1,16 @@
-"""Tests for the `POST /api/chat` endpoint in `app/web/routes.py`.
+"""Tests for the `POST /api/chat` endpoint in `app/api/v0/chat.py`.
 
-We replace `routes.stream_chat_pipeline` with a controlled async generator
+We replace `chat.stream_chat_pipeline` with a controlled async generator
 so the endpoint tests do not depend on Anthropic, Chroma, or the embedding
 model.
 """
 
-from app.web import routes
+from app.api.v0 import chat as chat_module
 from tests.conftest import FakeCollection, make_app
 
 
 def _install_pipeline_stub(monkeypatch, events: list[dict], captured: dict):
-    """Replace `routes.stream_chat_pipeline` with a stub.
+    """Replace `chat.stream_chat_pipeline` with a stub.
 
     Records the call args in `captured` and yields the given `events`.
     """
@@ -24,7 +24,7 @@ def _install_pipeline_stub(monkeypatch, events: list[dict], captured: dict):
         for event in events:
             yield event
 
-    monkeypatch.setattr(routes, "stream_chat_pipeline", stub)
+    monkeypatch.setattr(chat_module, "stream_chat_pipeline", stub)
 
 
 async def _read_sse_body(response) -> str:
@@ -109,8 +109,8 @@ async def test_chat_passes_request_to_pipeline(client_factory, monkeypatch):
 
 
 async def test_chat_request_applies_top_k_default(client_factory, monkeypatch):
-    """Omitting `top_k` should fall back to the default from `config.TOP_K`."""
-    from app.config import TOP_K
+    """Omitting `top_k` should fall back to the default from `constants.TOP_K`."""
+    from app.constants import TOP_K
 
     captured: dict = {}
     _install_pipeline_stub(monkeypatch, [{"type": "done"}], captured)

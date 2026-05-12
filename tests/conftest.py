@@ -17,7 +17,7 @@ import pytest
 import pytest_asyncio
 from fastapi import FastAPI
 
-from app.web.routes import router
+from app.api import router
 
 
 def make_app(

@@ -2,7 +2,7 @@
 
 import pytest
 
-from app.config import MIN_CONTEXT_SCORE
+from app.constants import MIN_CONTEXT_SCORE
 from app.rag.retrieval import (
     build_context_block,
     filter_relevant_chunks,
