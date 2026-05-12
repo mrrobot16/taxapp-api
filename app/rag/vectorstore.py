@@ -5,8 +5,8 @@ import threading
 
 import chromadb
 
-from config import CHROMA_DIR, COLLECTION_NAME, EMBED_MODEL
-from embeddings import LocalEmbeddingFunction
+from app.config import CHROMA_DIR, COLLECTION_NAME, EMBED_MODEL
+from app.rag.embeddings import LocalEmbeddingFunction
 
 logger = logging.getLogger("taxapp.api")
 

@@ -4,7 +4,7 @@ Taxapp — FastAPI Backend
 Exposes the RAG chatbot as a streaming SSE API so any frontend can consume it.
 
 Run with:
-    poetry run uvicorn api:app --reload --port 8000
+    poetry run uvicorn app.main:app --reload --port 8000
 """
 
 import logging
@@ -15,11 +15,11 @@ from anthropic import AsyncAnthropic
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-import config  # noqa: F401  — import side effects: load `.env` files
-from llm import get_candidate_models
-from logging_utils import install_access_log_middleware, setup_logging
-from routes import router
-from vectorstore import warmup_collection
+from app import config  # noqa: F401  — import side effects: load `.env` files
+from app.logging_utils import install_access_log_middleware, setup_logging
+from app.rag.llm import get_candidate_models
+from app.rag.vectorstore import warmup_collection
+from app.web.routes import router
 
 setup_logging()
 logger = logging.getLogger("taxapp.api")

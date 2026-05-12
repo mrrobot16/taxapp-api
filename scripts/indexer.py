@@ -22,7 +22,7 @@ import torch
 from sentence_transformers import SentenceTransformer
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from constants import (
+from app.config import (
     CHROMA_DIR,
     COLLECTION_NAME,
     DATA_DIR,

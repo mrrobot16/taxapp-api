@@ -43,12 +43,21 @@ class ColorFormatter(logging.Formatter):
         logging.CRITICAL: Colors.RED + Colors.BOLD,
     }
 
+    # uvicorn routes ALL server lifecycle messages (startup, shutdown, etc.)
+    # through a logger literally named "uvicorn.error". The name is misleading
+    # — most records are INFO. Display them under the parent "uvicorn" name so
+    # the log output doesn't look like everything is failing at boot.
+    LOGGER_NAME_ALIASES = {
+        "uvicorn.error": "uvicorn",
+    }
+
     def format(self, record: logging.LogRecord) -> str:
         ts = self.formatTime(record, "%Y-%m-%d %H:%M:%S")
         level_color = self.LEVEL_COLORS.get(record.levelno, Colors.WHITE)
+        display_name = self.LOGGER_NAME_ALIASES.get(record.name, record.name)
         ts_str = f"{Colors.GRAY}{ts}{Colors.RESET}"
         level_str = f"{level_color}{record.levelname:<7}{Colors.RESET}"
-        name_str = f"{Colors.CYAN}{record.name}{Colors.RESET}"
+        name_str = f"{Colors.CYAN}{display_name}{Colors.RESET}"
         loc_str = f"{Colors.DIM}{record.filename}:{record.lineno}{Colors.RESET}"
         msg = record.getMessage()
         if record.exc_info:

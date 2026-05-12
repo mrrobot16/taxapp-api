@@ -1,11 +1,11 @@
-"""Unit tests for `stream_chat_pipeline` in [api/pipeline.py](api/pipeline.py)."""
+"""Unit tests for `stream_chat_pipeline` in `app/rag/pipeline.py`."""
 
 import anthropic
 import pytest
 
-from config import MAX_HISTORY, MIN_CONTEXT_SCORE
-from pipeline import stream_chat_pipeline
-from schemas import ChatRequest, HistoryMessage
+from app.config import MAX_HISTORY, MIN_CONTEXT_SCORE
+from app.rag.pipeline import stream_chat_pipeline
+from app.schemas import ChatRequest, HistoryMessage
 from tests.conftest import (
     FakeAnthropic,
     FakeCollection,

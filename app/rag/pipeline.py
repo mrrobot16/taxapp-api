@@ -7,12 +7,12 @@ from collections.abc import AsyncIterator, Callable
 
 from anthropic import AsyncAnthropic
 
-from config import MAX_HISTORY
-from llm import is_model_access_error
-from logging_utils import Colors
-from prompts import SYSTEM_PROMPT
-from retrieval import build_context_block, filter_relevant_chunks, retrieve_context
-from schemas import ChatRequest
+from app.config import MAX_HISTORY
+from app.logging_utils import Colors
+from app.prompts import SYSTEM_PROMPT
+from app.rag.llm import is_model_access_error
+from app.rag.retrieval import build_context_block, filter_relevant_chunks, retrieve_context
+from app.schemas import ChatRequest
 
 logger = logging.getLogger("taxapp.api")
 

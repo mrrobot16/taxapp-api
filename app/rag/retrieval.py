@@ -1,6 +1,6 @@
 """RAG retrieval and context-building helpers."""
 
-from config import MIN_CONTEXT_SCORE, TOP_K
+from app.config import MIN_CONTEXT_SCORE, TOP_K
 
 _SOURCE_LABEL_TEMPLATES: dict[str, str] = {
     "form_summary": "IRS Form Summary — {form}",

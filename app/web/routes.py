@@ -3,9 +3,9 @@
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 
-from pipeline import stream_chat_pipeline
-from schemas import ChatRequest
-from sse import stream_sse
+from app.rag.pipeline import stream_chat_pipeline
+from app.schemas import ChatRequest
+from app.web.sse import stream_sse
 
 router = APIRouter()
 

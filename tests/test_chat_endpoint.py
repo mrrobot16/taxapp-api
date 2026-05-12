@@ -1,11 +1,11 @@
-"""Tests for the `POST /api/chat` endpoint in [api/routes.py](api/routes.py).
+"""Tests for the `POST /api/chat` endpoint in `app/web/routes.py`.
 
 We replace `routes.stream_chat_pipeline` with a controlled async generator
 so the endpoint tests do not depend on Anthropic, Chroma, or the embedding
 model.
 """
 
-import routes
+from app.web import routes
 from tests.conftest import FakeCollection, make_app
 
 
@@ -110,7 +110,7 @@ async def test_chat_passes_request_to_pipeline(client_factory, monkeypatch):
 
 async def test_chat_request_applies_top_k_default(client_factory, monkeypatch):
     """Omitting `top_k` should fall back to the default from `config.TOP_K`."""
-    from config import TOP_K
+    from app.config import TOP_K
 
     captured: dict = {}
     _install_pipeline_stub(monkeypatch, [{"type": "done"}], captured)

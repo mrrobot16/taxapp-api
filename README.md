@@ -10,36 +10,48 @@ then streaming an Anthropic Claude response over Server-Sent Events.
 User question
      │
      ▼
-┌──────────────────────┐    ┌────────────────────────┐
-│  FastAPI (api.py)    │───▶│  pipeline.py            │
-│  POST /api/chat (SSE)│    │  1. Embed query (Chroma)│
-└──────────────────────┘    │  2. Retrieve top-K      │
-                            │  3. Filter by score     │
-                            │  4. Build prompt        │
-                            │  5. Stream Claude reply │
-                            └────────────────────────┘
-                                       │
-                                       ▼
-                            ┌────────────────────────┐
-                            │  data/chroma_db/        │
-                            │  Persistent vector DB   │
-                            │  (built by indexer.py)  │
-                            └────────────────────────┘
+┌──────────────────────────┐    ┌─────────────────────────┐
+│  FastAPI (app/main.py)   │───▶│  app/rag/pipeline.py    │
+│  POST /api/chat (SSE)    │    │  1. Embed query (Chroma)│
+└──────────────────────────┘    │  2. Retrieve top-K      │
+                                │  3. Filter by score     │
+                                │  4. Build prompt        │
+                                │  5. Stream Claude reply │
+                                └─────────────────────────┘
+                                            │
+                                            ▼
+                                ┌─────────────────────────┐
+                                │  data/chroma_db/        │
+                                │  Persistent vector DB   │
+                                │  (built by indexer.py)  │
+                                └─────────────────────────┘
 ```
 
-Key modules:
+Layout:
 
-- `api.py` — FastAPI app, CORS, lifespan (warms up Chroma + Anthropic client).
-- `routes.py` — `/api/health` and `/api/chat` endpoints.
-- `pipeline.py` — RAG + streaming LLM pipeline, yields SSE-shaped events.
-- `retrieval.py` — Chroma query, score filtering, context block formatting.
-- `vectorstore.py` — Persistent Chroma collection warmup.
-- `embeddings.py` — SentenceTransformer embedding wrapper (`multi-qa-MiniLM-L6-cos-v1`).
-- `llm.py` — Anthropic model resolution with fallback across `DEFAULT_ANTHROPIC_MODELS`.
-- `prompts.py` — System prompt.
-- `config.py` — Constants and `.env` loading.
-- `scripts/irs-forms.py` — Downloads IRS form PDFs from `irs.gov` into `data/irs_forms/`.
-- `scripts/indexer.py` — Chunks PDFs + flow examples and embeds them into Chroma.
+```
+api/
+├── app/                # Application package
+│   ├── main.py         # FastAPI app, CORS, lifespan
+│   ├── config.py       # Constants and `.env` loading
+│   ├── schemas.py      # Pydantic request models
+│   ├── prompts.py      # System prompt
+│   ├── logging_utils.py
+│   ├── web/            # HTTP transport
+│   │   ├── routes.py   # /api/health and /api/chat
+│   │   └── sse.py      # Server-Sent Events helpers
+│   └── rag/            # Retrieval-Augmented Generation core
+│       ├── pipeline.py # RAG + streaming LLM orchestration
+│       ├── retrieval.py
+│       ├── vectorstore.py
+│       ├── embeddings.py
+│       └── llm.py
+├── scripts/
+│   ├── irs-forms.py    # Downloads IRS form PDFs into data/irs_forms/
+│   └── indexer.py      # Chunks + embeds PDFs into Chroma
+├── tests/
+└── data/               # Vector DB + raw PDFs (gitignored)
+```
 
 ## Prerequisites
 
@@ -69,7 +81,7 @@ Key modules:
    Optional:
 
    - `ANTHROPIC_MODEL` — Pin a specific Claude model (otherwise the server
-     tries each candidate in `config.py` until one succeeds).
+     tries each candidate in `app/config.py` until one succeeds).
 
 3. Download the IRS form PDFs (run once):
 
@@ -92,7 +104,7 @@ Key modules:
 ## Run the API
 
 ```bash
-poetry run uvicorn api:app --reload --port 8000
+poetry run uvicorn app.main:app --reload --port 8000
 ```
 
 Endpoints:
@@ -142,7 +154,7 @@ poetry run pytest
 
 ## Configuration knobs
 
-Defined in `config.py`:
+Defined in `app/config.py`:
 
 - `TOP_K = 8` — number of chunks retrieved per query.
 - `MAX_HISTORY = 10` — turns of conversation history forwarded to the LLM.

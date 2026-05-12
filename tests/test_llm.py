@@ -1,9 +1,9 @@
-"""Tests for the helpers in [api/llm.py](api/llm.py)."""
+"""Tests for the helpers in `app/rag/llm.py`."""
 
 import anthropic
 
-from config import DEFAULT_ANTHROPIC_MODELS
-from llm import get_candidate_models, is_model_access_error
+from app.config import DEFAULT_ANTHROPIC_MODELS
+from app.rag.llm import get_candidate_models, is_model_access_error
 from tests.conftest import make_anthropic_error
 
 

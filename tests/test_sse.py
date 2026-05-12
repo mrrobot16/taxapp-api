@@ -1,8 +1,8 @@
-"""Tests for the SSE helpers in [api/sse.py](api/sse.py)."""
+"""Tests for the SSE helpers in `app/web/sse.py`."""
 
 import json
 
-from sse import format_sse_event, stream_sse
+from app.web.sse import format_sse_event, stream_sse
 
 
 def test_format_sse_event_serializes_dict():

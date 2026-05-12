@@ -1,9 +1,9 @@
-"""Tests for the pure helpers in [api/retrieval.py](api/retrieval.py)."""
+"""Tests for the pure helpers in `app/rag/retrieval.py`."""
 
 import pytest
 
-from config import MIN_CONTEXT_SCORE
-from retrieval import (
+from app.config import MIN_CONTEXT_SCORE
+from app.rag.retrieval import (
     build_context_block,
     filter_relevant_chunks,
     retrieve_context,

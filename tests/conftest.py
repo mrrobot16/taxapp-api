@@ -1,7 +1,7 @@
 """Shared fixtures and fakes for the Taxapp API test suite.
 
-The real app in [api/api.py](api/api.py) wires up `app.state` from a lifespan
-that requires `ANTHROPIC_API_KEY`, a Chroma collection, and loads a
+The real app in `app/main.py` wires up `app.state` from a lifespan that
+requires `ANTHROPIC_API_KEY`, a Chroma collection, and loads a
 SentenceTransformer model. We skip all of that here: each test gets a fresh
 `FastAPI()` with the router mounted and only the `app.state` attributes it
 actually needs.
@@ -9,9 +9,7 @@ actually needs.
 
 from __future__ import annotations
 
-import sys
 from collections.abc import AsyncIterator, Iterable
-from pathlib import Path
 from typing import Any
 
 import httpx
@@ -19,11 +17,7 @@ import pytest
 import pytest_asyncio
 from fastapi import FastAPI
 
-API_DIR = Path(__file__).resolve().parent.parent
-if str(API_DIR) not in sys.path:
-    sys.path.insert(0, str(API_DIR))
-
-from routes import router  # noqa: E402
+from app.web.routes import router
 
 
 def make_app(
@@ -67,8 +61,8 @@ async def client_factory():
 class FakeCollection:
     """Minimal Chroma collection stand-in.
 
-    `query_result` must use the shape that [api/retrieval.py](api/retrieval.py)
-    expects: `{"documents": [[...]], "metadatas": [[...]], "distances": [[...]]}`.
+    `query_result` must use the shape that `app/rag/retrieval.py` expects:
+    `{"documents": [[...]], "metadatas": [[...]], "distances": [[...]]}`.
     """
 
     def __init__(
