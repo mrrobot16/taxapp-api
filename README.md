@@ -12,8 +12,8 @@ User question
      ▼
 ┌──────────────────────────┐    ┌─────────────────────────┐
 │  FastAPI (app/main.py)   │───▶│  app/rag/pipeline.py    │
-│  POST /api/chat (SSE)    │    │  1. Embed query (Chroma)│
-└──────────────────────────┘    │  2. Retrieve top-K      │
+│  app/api/v0/chat.py      │    │  1. Embed query (Chroma)│
+│  POST /api/chat (SSE)    │    │  2. Retrieve top-K      │
                                 │  3. Filter by score     │
                                 │  4. Build prompt        │
                                 │  5. Stream Claude reply │
@@ -31,27 +31,36 @@ Layout:
 
 ```
 api/
-├── app/                # Application package
-│   ├── main.py         # FastAPI app, CORS, lifespan
-│   ├── config.py       # Constants and `.env` loading
-│   ├── schemas.py      # Pydantic request models
-│   ├── prompts.py      # System prompt
-│   ├── logging_utils.py
-│   ├── web/            # HTTP transport
-│   │   ├── routes.py   # /api/health and /api/chat
-│   │   └── sse.py      # Server-Sent Events helpers
-│   └── rag/            # Retrieval-Augmented Generation core
-│       ├── pipeline.py # RAG + streaming LLM orchestration
+├── app/                    # Application package
+│   ├── main.py             # FastAPI app, CORS, lifespan
+│   ├── config.py           # Filesystem paths + `.env` loading
+│   ├── constants.py        # Hardcoded literal values (TOP_K, EMBED_MODEL, …)
+│   ├── schemas.py          # Pydantic request models
+│   ├── prompts.py          # System prompt
+│   ├── utils/              # Cross-cutting helpers
+│   │   └── logger.py       # Color formatter + access-log middleware
+│   ├── api/                # HTTP transport layer
+│   │   ├── sse.py          # Server-Sent Events helpers (shared)
+│   │   └── v0/             # Version 0 of the API (mounted at /api/)
+│   │       ├── chat.py     # POST /api/chat
+│   │       └── health.py   # GET  /api/health
+│   └── rag/                # Retrieval-Augmented Generation core
+│       ├── pipeline.py     # RAG + streaming LLM orchestration
 │       ├── retrieval.py
 │       ├── vectorstore.py
 │       ├── embeddings.py
 │       └── llm.py
 ├── scripts/
-│   ├── irs-forms.py    # Downloads IRS form PDFs into data/irs_forms/
-│   └── indexer.py      # Chunks + embeds PDFs into Chroma
+│   ├── irs-forms.py        # Downloads IRS form PDFs into data/irs_forms/
+│   └── indexer.py          # Chunks + embeds PDFs into Chroma
 ├── tests/
-└── data/               # Vector DB + raw PDFs (gitignored)
+└── data/                   # Vector DB + raw PDFs (gitignored)
 ```
+
+The `v0` package name is internal versioning only — it is **not** part of
+the URL. Clients continue to hit `/api/chat` and `/api/health`. Future
+versions can be added under `app/api/v1/`, etc., and mounted alongside in
+`app/api/__init__.py`.
 
 ## Prerequisites
 
@@ -81,7 +90,7 @@ api/
    Optional:
 
    - `ANTHROPIC_MODEL` — Pin a specific Claude model (otherwise the server
-     tries each candidate in `app/config.py` until one succeeds).
+     tries each candidate in `app/constants.py` until one succeeds).
 
 3. Download the IRS form PDFs (run once):
 
@@ -154,7 +163,7 @@ poetry run pytest
 
 ## Configuration knobs
 
-Defined in `app/config.py`:
+Defined in `app/constants.py`:
 
 - `TOP_K = 8` — number of chunks retrieved per query.
 - `MAX_HISTORY = 10` — turns of conversation history forwarded to the LLM.

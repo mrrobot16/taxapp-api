@@ -22,14 +22,8 @@ import torch
 from sentence_transformers import SentenceTransformer
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from app.config import (
-    CHROMA_DIR,
-    COLLECTION_NAME,
-    DATA_DIR,
-    EMBED_MODEL,
-    FLOWS_DIR,
-    IRS_FORMS_DIR,
-)
+from app.config import CHROMA_DIR, DATA_DIR, FLOWS_DIR, IRS_FORMS_DIR
+from app.constants import COLLECTION_NAME, EMBED_MODEL
 
 BATCH_SIZE = 1000
 
