@@ -2,7 +2,7 @@
 
 from pydantic import BaseModel
 
-from app.config import TOP_K
+from app.constants import TOP_K
 
 
 class HistoryMessage(BaseModel):

@@ -5,7 +5,7 @@ import os
 
 import anthropic
 
-from app.config import DEFAULT_ANTHROPIC_MODELS
+from app.constants import DEFAULT_ANTHROPIC_MODELS
 
 logger = logging.getLogger("taxapp.api")
 

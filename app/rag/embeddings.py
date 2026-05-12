@@ -9,7 +9,7 @@ from functools import lru_cache
 import torch
 from sentence_transformers import SentenceTransformer
 
-from app.config import EMBED_MODEL
+from app.constants import EMBED_MODEL
 
 
 def _get_device() -> str:
