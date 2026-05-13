@@ -2,7 +2,8 @@
 
 A RAG-powered IRS tax chatbot backend. Answers user tax questions by retrieving
 relevant chunks from a local vector index of IRS forms and workflow examples,
-then streaming an Anthropic Claude response over Server-Sent Events.
+then streaming an LLM response over Server-Sent Events. The LLM is pluggable —
+Anthropic Claude, OpenAI, or Google Gemini, chosen by a single env var.
 
 ## Architecture
 
@@ -10,14 +11,14 @@ then streaming an Anthropic Claude response over Server-Sent Events.
 User question
      │
      ▼
-┌──────────────────────────┐    ┌─────────────────────────┐
-│  FastAPI (app/main.py)   │───▶│  app/rag/pipeline.py    │
-│  app/api/v0/chat.py      │    │  1. Embed query (Chroma)│
-│  POST /api/chat (SSE)    │    │  2. Retrieve top-K      │
-                                │  3. Filter by score     │
-                                │  4. Build prompt        │
-                                │  5. Stream Claude reply │
-                                └─────────────────────────┘
+┌──────────────────────────┐    ┌──────────────────────────┐    ┌──────────────────┐
+│  FastAPI (app/main.py)   │───▶│  app/rag/pipeline.py     │───▶│  app/llm/        │
+│  app/api/v0/chat.py      │    │  1. Embed query (Chroma) │    │  LLMProvider     │
+│  POST /api/chat (SSE)    │    │  2. Retrieve top-K       │    │  ├── Anthropic   │
+                                │  3. Filter by score      │    │  ├── OpenAI      │
+                                │  4. Build prompt         │    │  └── Gemini      │
+                                │  5. Stream LLM reply     │    └──────────────────┘
+                                └──────────────────────────┘
                                             │
                                             ▼
                                 ┌─────────────────────────┐
@@ -38,18 +39,23 @@ api/
 │   ├── schemas.py          # Pydantic request models
 │   ├── prompts.py          # System prompt
 │   ├── utils/              # Cross-cutting helpers
-│   │   └── logger.py       # Color formatter + access-log middleware
+│   │   ├── logger.py       # Color formatter + access-log middleware
+│   │   └── sse.py          # Server-Sent Events helpers
 │   ├── api/                # HTTP transport layer
-│   │   ├── sse.py          # Server-Sent Events helpers (shared)
 │   │   └── v0/             # Version 0 of the API (mounted at /api/)
 │   │       ├── chat.py     # POST /api/chat
 │   │       └── health.py   # GET  /api/health
+│   ├── llm/                # Pluggable LLM providers (see "Choosing the LLM")
+│   │   ├── base.py         # LLMProvider Protocol + ProviderError
+│   │   ├── anthropic.py    # Claude (model fallback + pinning)
+│   │   ├── openai.py       # GPT-4o / GPT-4o-mini / …
+│   │   ├── gemini.py       # Gemini 2.5 Flash / Pro / …
+│   │   └── factory.py      # build_provider_from_env()
 │   └── rag/                # Retrieval-Augmented Generation core
-│       ├── pipeline.py     # RAG + streaming LLM orchestration
+│       ├── pipeline.py     # RAG orchestration (provider-agnostic)
 │       ├── retrieval.py
 │       ├── vectorstore.py
-│       ├── embeddings.py
-│       └── llm.py
+│       └── embeddings.py
 ├── scripts/
 │   ├── irs-forms.py        # Downloads IRS form PDFs into data/irs_forms/
 │   └── indexer.py          # Chunks + embeds PDFs into Chroma
@@ -66,7 +72,7 @@ versions can be added under `app/api/v1/`, etc., and mounted alongside in
 
 - Python `>=3.11,<3.15`
 - [Poetry](https://python-poetry.org/)
-- An Anthropic API key
+- An API key from at least one supported LLM vendor (Anthropic, OpenAI, or Google)
 
 ## Setup
 
@@ -82,15 +88,9 @@ versions can be added under `app/api/v1/`, etc., and mounted alongside in
    cp .env_example .env
    ```
 
-   Required:
-
-   - `ANTHROPIC_API_KEY` — Anthropic API key (must have access to one of the
-     models in `DEFAULT_ANTHROPIC_MODELS`, or set `ANTHROPIC_MODEL` to override).
-
-   Optional:
-
-   - `ANTHROPIC_MODEL` — Pin a specific Claude model (otherwise the server
-     tries each candidate in `app/constants.py` until one succeeds).
+   You only need credentials for the provider you actually select via
+   `LLM_PROVIDER`. See [Choosing the LLM](#choosing-the-llm) below for the full
+   list of env vars per provider.
 
 3. Download the IRS form PDFs (run once):
 
@@ -153,6 +153,84 @@ curl -N -X POST http://localhost:8000/api/chat \
   -d '{"message": "What is a W-2?"}'
 ```
 
+## Choosing the LLM
+
+The chat endpoint is **provider-agnostic**. The RAG pipeline talks to an
+`LLMProvider` Protocol (`app/llm/base.py`); the concrete implementation is
+selected at startup by `build_provider_from_env()` based on the `LLM_PROVIDER`
+environment variable. Swapping models is a `.env` change + restart — no code
+edits required.
+
+### Switching providers (env-only)
+
+Set two or three variables in `.env`:
+
+| Provider  | `LLM_PROVIDER` | API key env var                       | Model env var (optional) | Default model        |
+|-----------|----------------|---------------------------------------|--------------------------|----------------------|
+| Anthropic | `anthropic`    | `ANTHROPIC_API_KEY`                   | `ANTHROPIC_MODEL`        | first of `DEFAULT_ANTHROPIC_MODELS` (with fallback) |
+| OpenAI    | `openai`       | `OPENAI_API_KEY`                      | `OPENAI_MODEL`           | `gpt-4o-mini`        |
+| Gemini    | `gemini`       | `GEMINI_API_KEY` (or `GOOGLE_API_KEY`) | `GEMINI_MODEL`           | `gemini-2.5-flash`   |
+
+If `LLM_PROVIDER` is unset, the server defaults to `anthropic`. You do **not**
+need to supply keys or install SDKs for providers you aren't using — each
+implementation is imported lazily by `app/llm/factory.py`, so missing optional
+deps for unselected providers won't break startup.
+
+### Examples
+
+Claude (default, with a pinned model):
+
+```bash
+LLM_PROVIDER=anthropic
+ANTHROPIC_API_KEY=sk-ant-...
+ANTHROPIC_MODEL=claude-sonnet-4-6
+```
+
+GPT-4o:
+
+```bash
+LLM_PROVIDER=openai
+OPENAI_API_KEY=sk-...
+OPENAI_MODEL=gpt-4o
+```
+
+Gemini 2.5 Pro:
+
+```bash
+LLM_PROVIDER=gemini
+GEMINI_API_KEY=...
+GEMINI_MODEL=gemini-2.5-pro
+```
+
+After editing `.env`, **restart uvicorn** — the provider is constructed once in
+the FastAPI lifespan ([`app/main.py`](app/main.py)) and cached on
+`app.state.llm_provider`.
+
+### How Anthropic model fallback works
+
+If `ANTHROPIC_MODEL` is set, it is prepended to `DEFAULT_ANTHROPIC_MODELS` in
+[`app/constants.py`](app/constants.py). The provider tries each model in order
+until one is accepted by your API key, then **pins the winner** for the
+remainder of the process so subsequent requests skip dead candidates. This is
+Anthropic-specific behavior; the OpenAI and Gemini providers use a single
+configured model.
+
+### Adding a new provider
+
+Drop a new file under `app/llm/` that implements the `LLMProvider` Protocol
+defined in [`app/llm/base.py`](app/llm/base.py):
+
+```python
+class LLMProvider(Protocol):
+    name: str
+    def stream(self, *, system: str, messages: list[dict], max_tokens: int) -> AsyncIterator[str]: ...
+    async def aclose(self) -> None: ...
+```
+
+Then add a branch for it in `build_provider_from_env()`
+([`app/llm/factory.py`](app/llm/factory.py)). Nothing in `app/rag/pipeline.py`
+or `app/api/` needs to change.
+
 ## Tests
 
 ```bash
@@ -163,7 +241,7 @@ poetry run pytest
 
 ## Configuration knobs
 
-Defined in `app/constants.py`:
+Defined in [`app/constants.py`](app/constants.py):
 
 - `TOP_K = 8` — number of chunks retrieved per query.
 - `MAX_HISTORY = 10` — turns of conversation history forwarded to the LLM.
@@ -172,4 +250,9 @@ Defined in `app/constants.py`:
   context" fallback instead of guessing.
 - `EMBED_MODEL = "multi-qa-MiniLM-L6-cos-v1"` — embedding model used by both
   the indexer and runtime retrieval (they must match).
-- `DEFAULT_ANTHROPIC_MODELS` — ordered fallback list for the chat completion.
+- `DEFAULT_ANTHROPIC_MODELS` — ordered fallback list used by `AnthropicProvider`.
+
+Per-provider defaults (override via env, see [Choosing the LLM](#choosing-the-llm)):
+
+- `DEFAULT_OPENAI_MODEL = "gpt-4o-mini"` — in [`app/llm/openai.py`](app/llm/openai.py).
+- `DEFAULT_GEMINI_MODEL = "gemini-2.5-flash"` — in [`app/llm/gemini.py`](app/llm/gemini.py).
