@@ -17,3 +17,13 @@ DEFAULT_ANTHROPIC_MODELS = [
     "claude-sonnet-4-20250514",
     "claude-3-5-sonnet-latest",
 ]
+
+DEFAULT_GEMINI_MODELS = [
+
+]
+
+DEFAULT_OPENAI_MODELS = [
+
+]
+
+LLM_PROVIDER = "anthropic"
