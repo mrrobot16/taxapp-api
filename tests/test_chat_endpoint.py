@@ -1,12 +1,12 @@
 """Tests for the `POST /api/chat` endpoint in `app/api/v0/chat.py`.
 
-We replace `chat.stream_chat_pipeline` with a controlled async generator
-so the endpoint tests do not depend on Anthropic, Chroma, or the embedding
-model.
+We replace `chat.stream_chat_pipeline` with a controlled async generator so
+the endpoint tests do not depend on any concrete LLM provider, Chroma, or
+the embedding model.
 """
 
 from app.api.v0 import chat as chat_module
-from tests.conftest import FakeCollection, make_app
+from tests.conftest import FakeCollection, FakeProvider, make_app
 
 
 def _install_pipeline_stub(monkeypatch, events: list[dict], captured: dict):
@@ -15,12 +15,10 @@ def _install_pipeline_stub(monkeypatch, events: list[dict], captured: dict):
     Records the call args in `captured` and yields the given `events`.
     """
 
-    async def stub(req, collection, client, models, pin_model):
+    async def stub(req, collection, provider):
         captured["req"] = req
         captured["collection"] = collection
-        captured["client"] = client
-        captured["models"] = models
-        captured["pin_model"] = pin_model
+        captured["provider"] = provider
         for event in events:
             yield event
 
@@ -53,8 +51,7 @@ async def test_chat_streams_sse_envelope(client_factory, monkeypatch):
 
     app = make_app(
         collection=FakeCollection(count_value=1),
-        anthropic_models=["claude-sonnet-4-6"],
-        anthropic_client=object(),
+        llm_provider=FakeProvider(),
     )
 
     async with client_factory(app) as client:
@@ -77,10 +74,10 @@ async def test_chat_passes_request_to_pipeline(client_factory, monkeypatch):
     captured: dict = {}
     _install_pipeline_stub(monkeypatch, [{"type": "done"}], captured)
 
+    sentinel_provider = FakeProvider()
     app = make_app(
         collection=FakeCollection(),
-        anthropic_models=["m1", "m2"],
-        anthropic_client="sentinel-client",
+        llm_provider=sentinel_provider,
     )
 
     payload = {
@@ -104,8 +101,7 @@ async def test_chat_passes_request_to_pipeline(client_factory, monkeypatch):
     ]
     assert req.top_k == 3
     assert captured["collection"] is app.state.collection
-    assert captured["client"] == "sentinel-client"
-    assert captured["models"] is app.state.anthropic_models
+    assert captured["provider"] is sentinel_provider
 
 
 async def test_chat_request_applies_top_k_default(client_factory, monkeypatch):
@@ -115,7 +111,7 @@ async def test_chat_request_applies_top_k_default(client_factory, monkeypatch):
     captured: dict = {}
     _install_pipeline_stub(monkeypatch, [{"type": "done"}], captured)
 
-    app = make_app(collection=FakeCollection(), anthropic_models=["m1"])
+    app = make_app(collection=FakeCollection(), llm_provider=FakeProvider())
     async with client_factory(app) as client:
         async with client.stream("POST", "/api/chat", json={"message": "hi"}) as response:
             await _read_sse_body(response)
@@ -124,27 +120,8 @@ async def test_chat_request_applies_top_k_default(client_factory, monkeypatch):
     assert captured["req"].history == []
 
 
-async def test_chat_pin_model_hook_mutates_state(client_factory, monkeypatch):
-    captured: dict = {}
-    _install_pipeline_stub(monkeypatch, [{"type": "done"}], captured)
-
-    app = make_app(
-        collection=FakeCollection(),
-        anthropic_models=["m1", "m2"],
-    )
-
-    async with client_factory(app) as client:
-        async with client.stream("POST", "/api/chat", json={"message": "hi"}) as response:
-            await _read_sse_body(response)
-
-    pin = captured["pin_model"]
-    assert callable(pin)
-    pin("m2")
-    assert app.state.anthropic_models == ["m2"]
-
-
 async def test_chat_invalid_body_returns_422(client_factory):
-    app = make_app(collection=FakeCollection(), anthropic_models=["m1"])
+    app = make_app(collection=FakeCollection(), llm_provider=FakeProvider())
     async with client_factory(app) as client:
         response = await client.post("/api/chat", json={})
 
@@ -152,7 +129,7 @@ async def test_chat_invalid_body_returns_422(client_factory):
 
 
 async def test_chat_rejects_get(client_factory):
-    app = make_app(collection=FakeCollection(), anthropic_models=["m1"])
+    app = make_app(collection=FakeCollection(), llm_provider=FakeProvider())
     async with client_factory(app) as client:
         response = await client.get("/api/chat")
 

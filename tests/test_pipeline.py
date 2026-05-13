@@ -1,17 +1,15 @@
-"""Unit tests for `stream_chat_pipeline` in `app/rag/pipeline.py`."""
+"""Unit tests for `stream_chat_pipeline` in `app/rag/pipeline.py`.
 
-import anthropic
-import pytest
+The pipeline is provider-agnostic: it depends on the `LLMProvider` Protocol
+only. Vendor-specific concerns (model fallback, access-error classification)
+are covered in `tests/test_anthropic_provider.py`.
+"""
 
 from app.constants import MAX_HISTORY, MIN_CONTEXT_SCORE
+from app.llm.base import ProviderError
 from app.rag.pipeline import stream_chat_pipeline
 from app.schemas import ChatRequest, HistoryMessage
-from tests.conftest import (
-    FakeAnthropic,
-    FakeCollection,
-    collect_events,
-    make_anthropic_error,
-)
+from tests.conftest import FakeCollection, FakeProvider, collect_events
 
 
 def _low_score_collection() -> FakeCollection:
@@ -51,16 +49,10 @@ def _basic_request(**overrides) -> ChatRequest:
 
 async def test_pipeline_emits_no_context_fallback_when_all_chunks_filtered():
     collection = _low_score_collection()
-    client = FakeAnthropic()
+    provider = FakeProvider()
 
     events = await collect_events(
-        stream_chat_pipeline(
-            _basic_request(),
-            collection,
-            client,
-            models=["m1"],
-            pin_model=None,
-        )
+        stream_chat_pipeline(_basic_request(), collection, provider)
     )
 
     types = [e["type"] for e in events]
@@ -71,23 +63,16 @@ async def test_pipeline_emits_no_context_fallback_when_all_chunks_filtered():
     assert events[3] == {"type": "sources", "sources": []}
     assert events[4] == {"type": "done"}
 
-    # Anthropic must never be called when no relevant chunks exist.
-    assert client.messages.calls == []
+    # Provider must never be called when no relevant chunks exist.
+    assert provider.calls == []
 
 
 async def test_pipeline_happy_path_streams_text_and_sources():
     collection = _relevant_collection()
-    client = FakeAnthropic(behaviors=[["Hello ", "world"]])
-    pinned: list[str] = []
+    provider = FakeProvider(behaviors=[["Hello ", "world"]])
 
     events = await collect_events(
-        stream_chat_pipeline(
-            _basic_request(),
-            collection,
-            client,
-            models=["m1"],
-            pin_model=pinned.append,
-        )
+        stream_chat_pipeline(_basic_request(), collection, provider)
     )
 
     types = [e["type"] for e in events]
@@ -115,91 +100,44 @@ async def test_pipeline_happy_path_streams_text_and_sources():
         assert s["score"] == rounded
     assert events[6] == {"type": "done"}
 
-    # First model succeeded — pin_model should NOT have been called.
-    assert pinned == []
-    assert len(client.messages.calls) == 1
-    assert client.messages.calls[0]["model"] == "m1"
+    assert len(provider.calls) == 1
+    call = provider.calls[0]
+    assert call["max_tokens"] == 2048
+    assert call["messages"][-1]["role"] == "user"
 
 
-@pytest.mark.parametrize(
-    "error_cls",
-    [anthropic.NotFoundError, anthropic.PermissionDeniedError],
-)
-async def test_pipeline_falls_back_to_next_model_on_access_error(error_cls):
-    collection = _relevant_collection()
-    client = FakeAnthropic(
-        behaviors=[
-            make_anthropic_error(error_cls, status_code=403),
-            ["only chunk"],
-        ]
-    )
-    pinned: list[str] = []
-
-    events = await collect_events(
-        stream_chat_pipeline(
-            _basic_request(),
-            collection,
-            client,
-            models=["m1", "m2"],
-            pin_model=pinned.append,
-        )
-    )
-
-    types = [e["type"] for e in events]
-    assert "error" not in types
-    assert types[-1] == "done"
-
-    # Both models were attempted.
-    assert [c["model"] for c in client.messages.calls] == ["m1", "m2"]
-    # Because the chosen model differs from models[0], pin_model is called.
-    assert pinned == ["m2"]
-
-
-async def test_pipeline_yields_error_event_on_non_access_exception():
+async def test_pipeline_yields_error_event_on_generic_exception():
     collection = _relevant_collection()
     boom = RuntimeError("kaboom")
-    client = FakeAnthropic(behaviors=[boom])
+    provider = FakeProvider(behaviors=[boom])
 
     events = await collect_events(
-        stream_chat_pipeline(
-            _basic_request(),
-            collection,
-            client,
-            models=["m1", "m2"],
-            pin_model=None,
-        )
+        stream_chat_pipeline(_basic_request(), collection, provider)
     )
 
     assert events[-1] == {"type": "error", "message": "kaboom"}
     # Pipeline stops after the error: no "done", no "sources".
     assert not any(e["type"] == "done" for e in events)
     assert not any(e["type"] == "sources" for e in events)
-    # Second model should not have been tried.
-    assert [c["model"] for c in client.messages.calls] == ["m1"]
 
 
-async def test_pipeline_yields_error_when_no_models_available():
+async def test_pipeline_yields_error_event_on_provider_error():
+    """`ProviderError` from the provider becomes an SSE `error` event."""
     collection = _relevant_collection()
-    client = FakeAnthropic()
+    err = ProviderError("No allowed model")
+    provider = FakeProvider(behaviors=[err])
 
     events = await collect_events(
-        stream_chat_pipeline(
-            _basic_request(),
-            collection,
-            client,
-            models=[],
-            pin_model=None,
-        )
+        stream_chat_pipeline(_basic_request(), collection, provider)
     )
 
-    assert events[-1]["type"] == "error"
-    assert "No allowed Anthropic model" in events[-1]["message"]
-    assert client.messages.calls == []
+    assert events[-1] == {"type": "error", "message": "No allowed model"}
+    assert not any(e["type"] == "done" for e in events)
 
 
 async def test_pipeline_truncates_history_to_max_history_pairs():
     collection = _relevant_collection()
-    client = FakeAnthropic(behaviors=[["ok"]])
+    provider = FakeProvider(behaviors=[["ok"]])
 
     # 2 * MAX_HISTORY pairs of turns = 4 * MAX_HISTORY messages total. Far
     # over the cap so the trimming is observable.
@@ -209,17 +147,9 @@ async def test_pipeline_truncates_history_to_max_history_pairs():
     ]
     req = ChatRequest(message="latest", history=too_many, top_k=2)
 
-    await collect_events(
-        stream_chat_pipeline(
-            req,
-            collection,
-            client,
-            models=["m1"],
-            pin_model=None,
-        )
-    )
+    await collect_events(stream_chat_pipeline(req, collection, provider))
 
-    call = client.messages.calls[0]
+    call = provider.calls[0]
     sent_messages = call["messages"]
     # Last message must be the synthesized user turn with the question.
     assert sent_messages[-1]["role"] == "user"
@@ -234,12 +164,10 @@ async def test_pipeline_truncates_history_to_max_history_pairs():
 async def test_pipeline_passes_top_k_to_retrieval():
     """`req.top_k` should reach `collection.query(..., n_results=top_k)`."""
     collection = _relevant_collection()
-    client = FakeAnthropic(behaviors=[["ok"]])
+    provider = FakeProvider(behaviors=[["ok"]])
     req = _basic_request(top_k=3)
 
-    await collect_events(
-        stream_chat_pipeline(req, collection, client, models=["m1"], pin_model=None)
-    )
+    await collect_events(stream_chat_pipeline(req, collection, provider))
 
     assert collection.query_calls[0]["n_results"] == 3
     assert collection.query_calls[0]["query_texts"] == [req.message]
@@ -255,21 +183,29 @@ async def test_pipeline_clips_sources_text_to_600_chars():
             "distances": [[0.1]],
         }
     )
-    client = FakeAnthropic(behaviors=[["ok"]])
+    provider = FakeProvider(behaviors=[["ok"]])
 
     events = await collect_events(
-        stream_chat_pipeline(
-            _basic_request(),
-            collection,
-            client,
-            models=["m1"],
-            pin_model=None,
-        )
+        stream_chat_pipeline(_basic_request(), collection, provider)
     )
 
     sources_events = [e for e in events if e["type"] == "sources"]
     assert sources_events
     assert len(sources_events[0]["sources"][0]["text"]) == 600
+
+
+async def test_pipeline_forwards_system_prompt_to_provider():
+    """Provider receives the project's SYSTEM_PROMPT unmodified."""
+    from app.prompts import SYSTEM_PROMPT
+
+    collection = _relevant_collection()
+    provider = FakeProvider(behaviors=[["ok"]])
+
+    await collect_events(
+        stream_chat_pipeline(_basic_request(), collection, provider)
+    )
+
+    assert provider.calls[0]["system"] == SYSTEM_PROMPT
 
 
 # Sanity check: MIN_CONTEXT_SCORE assumptions used by the helpers above.

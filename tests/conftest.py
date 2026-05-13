@@ -1,10 +1,9 @@
 """Shared fixtures and fakes for the Taxapp API test suite.
 
 The real app in `app/main.py` wires up `app.state` from a lifespan that
-requires `ANTHROPIC_API_KEY`, a Chroma collection, and loads a
-SentenceTransformer model. We skip all of that here: each test gets a fresh
-`FastAPI()` with the router mounted and only the `app.state` attributes it
-actually needs.
+requires API keys, a Chroma collection, and a SentenceTransformer model. We
+skip all of that here: each test gets a fresh `FastAPI()` with the router
+mounted and only the `app.state` attributes it actually needs.
 """
 
 from __future__ import annotations
@@ -23,14 +22,12 @@ from app.api import router
 def make_app(
     *,
     collection: Any = None,
-    anthropic_models: list[str] | None = None,
-    anthropic_client: Any = None,
+    llm_provider: Any = None,
 ) -> FastAPI:
     """Build a bare FastAPI app with only the state the routes need."""
     app = FastAPI()
     app.state.collection = collection
-    app.state.anthropic_models = anthropic_models or []
-    app.state.anthropic_client = anthropic_client
+    app.state.llm_provider = llm_provider
     app.include_router(router)
     return app
 
@@ -89,68 +86,41 @@ class FakeCollection:
         return self._query_result
 
 
-class _FakeTextStream:
-    """Async iterator over a configured list of text chunks."""
+class FakeProvider:
+    """Provider-agnostic stand-in for `LLMProvider`.
 
-    def __init__(self, chunks: Iterable[str]) -> None:
-        self._chunks = list(chunks)
-
-    def __aiter__(self) -> "_FakeTextStream":
-        return self
-
-    async def __anext__(self) -> str:
-        if not self._chunks:
-            raise StopAsyncIteration
-        return self._chunks.pop(0)
-
-
-class _FakeStreamCM:
-    """Async context manager mimicking `client.messages.stream(...)`."""
-
-    def __init__(self, chunks: Iterable[str]) -> None:
-        self.text_stream = _FakeTextStream(chunks)
-
-    async def __aenter__(self) -> "_FakeStreamCM":
-        return self
-
-    async def __aexit__(self, exc_type, exc, tb) -> bool:
-        return False
-
-
-class FakeMessages:
-    """Mimics `AsyncAnthropic.messages` for our pipeline tests.
-
-    `behaviors` is consumed in order, once per `stream()` call:
-      - a list[str] -> text chunks to yield from the streaming response
-      - an Exception instance -> raised synchronously from `stream()`
+    `behaviors` is consumed once per `stream()` call:
+      - `list[str]` -> text chunks to yield
+      - `BaseException` instance -> raised on first iteration
     """
+
+    name = "fake"
 
     def __init__(self, behaviors: list[Any] | None = None) -> None:
         self._behaviors: list[Any] = list(behaviors) if behaviors is not None else [[]]
         self.calls: list[dict] = []
+        self.closed: bool = False
 
-    def stream(self, **kwargs):
-        self.calls.append(kwargs)
+    async def stream(
+        self,
+        *,
+        system: str,
+        messages: list[dict],
+        max_tokens: int,
+    ) -> AsyncIterator[str]:
+        self.calls.append(
+            {"system": system, "messages": messages, "max_tokens": max_tokens}
+        )
         if not self._behaviors:
-            return _FakeStreamCM([])
+            return
         behavior = self._behaviors.pop(0)
         if isinstance(behavior, BaseException):
             raise behavior
-        return _FakeStreamCM(behavior)
+        for chunk in behavior:
+            yield chunk
 
-
-class FakeAnthropic:
-    """Stand-in for `anthropic.AsyncAnthropic` covering only what we use."""
-
-    def __init__(self, behaviors: list[Any] | None = None) -> None:
-        self.messages = FakeMessages(behaviors)
-
-
-def make_anthropic_error(error_cls: type, status_code: int = 404) -> Exception:
-    """Construct a real anthropic.* status error usable for tests."""
-    request = httpx.Request("POST", "https://api.anthropic.com/v1/messages")
-    response = httpx.Response(status_code, request=request)
-    return error_cls(message="test error", response=response, body=None)
+    async def aclose(self) -> None:
+        self.closed = True
 
 
 async def collect_events(agen: AsyncIterator[dict]) -> list[dict]:
@@ -165,5 +135,14 @@ def fake_collection_factory():
 
 
 @pytest.fixture
-def fake_anthropic_factory():
-    return FakeAnthropic
+def fake_provider_factory():
+    return FakeProvider
+
+
+@pytest.fixture
+def fake_relevant_chunks() -> Iterable[dict]:
+    """Convenience: 2 chunks safely above MIN_CONTEXT_SCORE."""
+    return [
+        {"text": "doc-a", "metadata": {"source": "irs_form", "form": "1040"}, "score": 0.9},
+        {"text": "doc-b", "metadata": {"source": "irs_form", "form": "W2"}, "score": 0.8},
+    ]

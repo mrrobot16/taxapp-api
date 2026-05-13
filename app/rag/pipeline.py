@@ -3,26 +3,20 @@
 import asyncio
 import logging
 import textwrap
-from collections.abc import AsyncIterator, Callable
-
-from anthropic import AsyncAnthropic
+from collections.abc import AsyncIterator
 
 from app.constants import MAX_HISTORY
+from app.llm.base import LLMProvider, ProviderError
 from app.prompts import SYSTEM_PROMPT
-from app.rag.llm import is_model_access_error
 from app.rag.retrieval import build_context_block, filter_relevant_chunks, retrieve_context
 from app.schemas import ChatRequest
-from app.utils.logger import Colors
 
 logger = logging.getLogger("taxapp.api")
 
-
 async def stream_chat_pipeline(
-    req: ChatRequest,
+    chat_request: ChatRequest,
     collection,
-    client: AsyncAnthropic,
-    models: list[str],
-    pin_model: Callable[[str], None] | None = None,
+    provider: LLMProvider,
 ) -> AsyncIterator[dict]:
     """Run the RAG + LLM streaming flow and yield SSE-shaped dict events.
 
@@ -32,7 +26,7 @@ async def stream_chat_pipeline(
     """
     yield {"type": "phase", "label": "Searching IRS knowledge base"}
     retrieved_chunks = await asyncio.to_thread(
-        retrieve_context, collection, req.message, req.top_k
+        retrieve_context, collection, chat_request.message, chat_request.top_k
     )
 
     chunks = filter_relevant_chunks(retrieved_chunks)
@@ -61,61 +55,37 @@ async def stream_chat_pipeline(
 
         ## Question
 
-        {req.message}
+        {chat_request.message}
     """).strip()
 
     history_payload = [
-        {"role": m.role, "content": m.content} for m in req.history[-MAX_HISTORY * 2:]
+        {"role": message.role, "content": message.content} for message in chat_request.history[-MAX_HISTORY * 2:]
     ]
     messages_payload = history_payload + [{"role": "user", "content": user_content}]
 
     yield {"type": "phase", "label": "Preparing your answer"}
-    streamed = False
-    last_error: Exception | None = None
-    chosen_model: str | None = None
-
-    for model in models:
-        try:
-            logger.info("Trying model: %s%s%s", Colors.MAGENTA, model, Colors.RESET)
-            async with client.messages.stream(
-                model=model,
-                max_tokens=2048,
-                system=SYSTEM_PROMPT,
-                messages=messages_payload,
-            ) as stream:
-                streamed = True
-                chosen_model = model
-                async for text_chunk in stream.text_stream:
-                    yield {"type": "text", "content": text_chunk}
-            break
-        except Exception as e:
-            last_error = e
-            if not streamed and is_model_access_error(e):
-                continue
-            yield {"type": "error", "message": str(e)}
-            return
-
-    if not streamed:
-        msg = (
-            "No allowed Anthropic model found for this API key. "
-            "Set ANTHROPIC_MODEL in .env to a model your key can access."
-        )
-        if last_error is not None:
-            msg = f"{msg} ({last_error})"
-        yield {"type": "error", "message": msg}
+    try:
+        async for text_chunk in provider.stream(
+            system=SYSTEM_PROMPT,
+            messages=messages_payload,
+            max_tokens=2048,
+        ):
+            yield {"type": "text", "content": text_chunk}
+    except ProviderError as exception:
+        yield {"type": "error", "message": str(exception)}
         return
-
-    if pin_model is not None and chosen_model is not None and models[0] != chosen_model:
-        pin_model(chosen_model)
+    except Exception as exception:
+        yield {"type": "error", "message": str(exception)}
+        return
 
     yield {"type": "phase", "label": "Finalizing sources"}
     sources = [
         {
-            "text": c["text"][:600],
-            "metadata": c["metadata"],
-            "score": round(c["score"], 3),
+            "text": chunk["text"][:600],
+            "metadata": chunk["metadata"],
+            "score": round(chunk["score"], 3),
         }
-        for c in chunks
+        for chunk in chunks
     ]
     yield {"type": "sources", "sources": sources}
     yield {"type": "done"}

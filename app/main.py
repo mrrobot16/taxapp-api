@@ -8,16 +8,14 @@ Run with:
 """
 
 import logging
-import os
 from contextlib import asynccontextmanager
 
-from anthropic import AsyncAnthropic
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app import config  # noqa: F401  — import side effects: load `.env` files
 from app.api import router
-from app.rag.llm import get_candidate_models
+from app.llm import build_provider_from_env
 from app.rag.vectorstore import warmup_collection
 from app.utils.logger import install_access_log_middleware, setup_logging
 
@@ -27,21 +25,16 @@ logger = logging.getLogger("taxapp.api")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    anthropic_api_key = os.getenv("ANTHROPIC_API_KEY")
-    if not anthropic_api_key:
-        raise RuntimeError("ANTHROPIC_API_KEY is not configured on the server.")
-
     app.state.collection = warmup_collection()
     if app.state.collection is None:
         logger.warning("Knowledge base not indexed yet; /api/chat will return 503.")
 
-    app.state.anthropic_models = get_candidate_models()
-    app.state.anthropic_client = AsyncAnthropic(api_key=anthropic_api_key)
+    app.state.llm_provider = build_provider_from_env()
 
     try:
         yield
     finally:
-        await app.state.anthropic_client.close()
+        await app.state.llm_provider.aclose()
 
 
 app = FastAPI(title="Taxapp API", version="1.0.0", lifespan=lifespan)
