@@ -26,4 +26,6 @@ DEFAULT_OPENAI_MODELS = [
 
 ]
 
+SUPPORTED_PROVIDERS = ("anthropic", "openai", "gemini")
+
 LLM_PROVIDER = "anthropic"

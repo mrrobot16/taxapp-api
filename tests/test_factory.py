@@ -36,41 +36,36 @@ def _patch_provider_from_env(monkeypatch):
     )
 
 
-def test_build_provider_defaults_to_anthropic(monkeypatch):
-    monkeypatch.delenv("LLM_PROVIDER", raising=False)
+def test_build_provider_uses_configured_constant():
+    """The unpatched constant in `app.constants` should drive provider selection."""
     provider = factory_module.build_provider_from_env()
     assert isinstance(provider, _Sentinel)
-    assert provider.label == "anthropic"
+    assert provider.label == factory_module.LLM_PROVIDER
 
 
 def test_build_provider_respects_anthropic(monkeypatch):
-    monkeypatch.setenv("LLM_PROVIDER", "anthropic")
+    monkeypatch.setattr(factory_module, "LLM_PROVIDER", "anthropic")
     assert factory_module.build_provider_from_env().label == "anthropic"
 
 
 def test_build_provider_respects_openai(monkeypatch):
-    monkeypatch.setenv("LLM_PROVIDER", "openai")
+    monkeypatch.setattr(factory_module, "LLM_PROVIDER", "openai")
     assert factory_module.build_provider_from_env().label == "openai"
 
 
 def test_build_provider_respects_gemini(monkeypatch):
-    monkeypatch.setenv("LLM_PROVIDER", "gemini")
+    monkeypatch.setattr(factory_module, "LLM_PROVIDER", "gemini")
     assert factory_module.build_provider_from_env().label == "gemini"
 
 
-def test_build_provider_is_case_insensitive_and_strips(monkeypatch):
-    monkeypatch.setenv("LLM_PROVIDER", "  OpenAI  ")
-    assert factory_module.build_provider_from_env().label == "openai"
-
-
 def test_build_provider_raises_on_unknown(monkeypatch):
-    monkeypatch.setenv("LLM_PROVIDER", "huggingface")
+    monkeypatch.setattr(factory_module, "LLM_PROVIDER", "huggingface")
     with pytest.raises(ProviderError, match="Unknown LLM_PROVIDER"):
         factory_module.build_provider_from_env()
 
 
-def test_build_provider_empty_env_falls_back_to_default(monkeypatch):
-    monkeypatch.setenv("LLM_PROVIDER", "")
-    # Empty string is a "no value" -> default. (The factory uses `os.getenv(...)
-    # or DEFAULT_PROVIDER`, which treats "" as falsy.)
-    assert factory_module.build_provider_from_env().label == "anthropic"
+def test_build_provider_raises_on_empty(monkeypatch):
+    """Empty string is not a valid provider; the factory should reject it."""
+    monkeypatch.setattr(factory_module, "LLM_PROVIDER", "")
+    with pytest.raises(ProviderError, match="Unknown LLM_PROVIDER"):
+        factory_module.build_provider_from_env()
