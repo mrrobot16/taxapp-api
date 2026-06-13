@@ -16,7 +16,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app import config  # noqa: F401  — import side effects: load `.env` files
 from app.api import router
 from app.llm import build_provider_from_env
-# from app.rag.vectorstore import warmup_collection
+from app.rag.vectorstore import warmup_collection
 from app.utils.logger import install_access_log_middleware, setup_logging
 
 setup_logging()
@@ -25,7 +25,7 @@ logger = logging.getLogger("taxapp.api")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # app.state.collection = 
+    app.state.collection = warmup_collection()
     app.state.collection = None
     if app.state.collection is None:
         logger.warning("Knowledge base not indexed yet; /api/chat will return 503.")
