@@ -7,7 +7,7 @@ Run this once before starting the chatbot:
 
 Documents indexed:
   - data/irs_forms/  : IRS tax form PDFs (text extracted)
-  - data/flows/      : End-to-end tax workflow examples
+  - scripts/flows/   : End-to-end tax workflow examples
 """
 
 import sys
@@ -163,7 +163,7 @@ def collect_pdf_documents(directory: Path) -> list[dict]:
 
 
 def collect_documents() -> list[dict]:
-    """Walk data/irs_forms and data/flows, return a list of {id, text, metadata} dicts."""
+    """Walk data/irs_forms and scripts/flows, return a list of {id, text, metadata} dicts."""
     docs = []
 
     docs.extend(collect_pdf_documents(IRS_FORMS_DIR))
@@ -175,13 +175,14 @@ def collect_documents() -> list[dict]:
             text = txt_path.read_text(encoding="utf-8", errors="ignore").strip()
             if not text:
                 continue
+            rel_path = Path("flows") / txt_path.relative_to(FLOWS_DIR)
             docs.append({
-                "id": f"flow::{txt_path.relative_to(DATA_DIR)}",
+                "id": f"flow::{rel_path}",
                 "text": text,
                 "metadata": {
                     "source": "flow_example",
                     "flow": flow_dir.name,
-                    "file": str(txt_path.relative_to(DATA_DIR)),
+                    "file": str(rel_path),
                 },
             })
 
