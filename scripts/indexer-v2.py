@@ -3,17 +3,24 @@ Indexes tax knowledge documents into a ChromaDB vector database.
 Before running this script, you need to download the IRS forms and flows using the running scripts/irs-forms.py script.
 
 Run this once before starting the chatbot:
-    python indexer.py
+    python scripts/indexer-v2.py
 
 Documents indexed:
   - data/irs_forms/  : IRS tax form PDFs (text extracted)
   - scripts/flows/   : End-to-end tax workflow examples
+
+Processes one source file at a time to keep memory use low on constrained hosts (e.g. Render 2GB).
+
+Environment variables:
+  INDEXER_ADD_BATCH_SIZE       Chroma add batch size (default: 100)
+  INDEXER_EMBED_BATCH_SIZE     SentenceTransformer encode batch size (default: 8 on MPS, 16 on CPU/CUDA)
+  INDEXER_EMBED_BATCH_SIZE_CPU CPU fallback batch size after MPS OOM (default: 8)
 """
 
+import gc
+import os
 import sys
 import time
-import os
-from multiprocessing import Pool, cpu_count
 from pathlib import Path
 
 import chromadb
@@ -25,10 +32,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from app.config import CHROMA_DIR, DATA_DIR, FLOWS_DIR, IRS_FORMS_DIR
 from app.constants import COLLECTION_NAME, EMBED_MODEL
 
-BATCH_SIZE = 1000
+ADD_BATCH_SIZE = int(os.getenv("INDEXER_ADD_BATCH_SIZE", "100"))
 
-CHUNK_SIZE = 1500    
-CHUNK_OVERLAP = 200   
+CHUNK_SIZE = 1500
+CHUNK_OVERLAP = 200
 
 
 def get_device() -> str:
@@ -46,7 +53,7 @@ class LocalEmbeddingFunction:
         self._model_name = model_name
         self.device = device or get_device()
         self.model = SentenceTransformer(model_name, device=self.device)
-        default_batch_size = 8 if self.device == "mps" else 32
+        default_batch_size = 8 if self.device == "mps" else 16
         self.encode_batch_size = int(os.getenv("INDEXER_EMBED_BATCH_SIZE", str(default_batch_size)))
 
     def __call__(self, input: list[str]) -> list[list[float]]:
@@ -64,7 +71,7 @@ class LocalEmbeddingFunction:
                     torch.mps.empty_cache()
                 self.device = "cpu"
                 self.model = self.model.to("cpu")
-                self.encode_batch_size = int(os.getenv("INDEXER_EMBED_BATCH_SIZE_CPU", "16"))
+                self.encode_batch_size = int(os.getenv("INDEXER_EMBED_BATCH_SIZE_CPU", "8"))
                 return self.model.encode(
                     input,
                     show_progress_bar=False,
@@ -118,75 +125,142 @@ def chunk_text(text: str, chunk_size: int = CHUNK_SIZE, overlap: int = CHUNK_OVE
     return chunks
 
 
-def collect_pdf_documents(directory: Path) -> list[dict]:
-    """Scan a directory for PDFs, extract text, chunk, and return doc dicts."""
-    docs = []
-    if not directory.exists():
-        print(f"  Skipping {directory} (not found)")
-        return docs
+def docs_from_pdf(pdf_path: Path) -> list[dict]:
+    """Extract, chunk, and return doc dicts for a single PDF."""
+    text = extract_pdf_text(pdf_path)
+    if not text:
+        return []
 
-    pdf_files = sorted(directory.glob("*.pdf"))
-    print(f"  {directory.relative_to(DATA_DIR)}: {len(pdf_files)} PDFs")
+    name = pdf_path.stem
+    rel_path = str(pdf_path.relative_to(DATA_DIR))
+    chunks = chunk_text(text)
+    docs: list[dict] = []
 
-    workers = int(os.getenv("INDEXER_PDF_WORKERS", "1"))
-    workers = max(1, min(workers, len(pdf_files)))
-    print(f"  Extracting text with {workers} worker(s) …")
-    if workers == 1:
-        texts = [extract_pdf_text(p) for p in pdf_files]
-    else:
-        with Pool(workers) as pool:
-            texts = pool.map(extract_pdf_text, pdf_files)
-
-    for pdf_path, text in zip(pdf_files, texts):
-        if not text:
-            continue
-
-        name = pdf_path.stem
-        rel_path = str(pdf_path.relative_to(DATA_DIR))
-        chunks = chunk_text(text)
-
-        for ci, chunk in enumerate(chunks):
-            chunk_id = f"form::{rel_path}::chunk{ci}"
-            docs.append({
-                "id": chunk_id,
-                "text": chunk,
-                "metadata": {
-                    "source": "irs_form",
-                    "form": name,
-                    "file": rel_path,
-                    "chunk": ci,
-                    "total_chunks": len(chunks),
-                },
-            })
+    for ci, chunk in enumerate(chunks):
+        docs.append({
+            "id": f"form::{rel_path}::chunk{ci}",
+            "text": chunk,
+            "metadata": {
+                "source": "irs_form",
+                "form": name,
+                "file": rel_path,
+                "chunk": ci,
+                "total_chunks": len(chunks),
+            },
+        })
 
     return docs
 
 
-def collect_documents() -> list[dict]:
-    """Walk data/irs_forms and scripts/flows, return a list of {id, text, metadata} dicts."""
-    docs = []
+def doc_from_flow(txt_path: Path, flow_dir: Path) -> dict | None:
+    """Read a flow example text file and return a single doc dict."""
+    text = txt_path.read_text(encoding="utf-8", errors="ignore").strip()
+    if not text:
+        return None
 
-    docs.extend(collect_pdf_documents(IRS_FORMS_DIR))
+    rel_path = Path("flows") / txt_path.relative_to(FLOWS_DIR)
+    return {
+        "id": f"flow::{rel_path}",
+        "text": text,
+        "metadata": {
+            "source": "flow_example",
+            "flow": flow_dir.name,
+            "file": str(rel_path),
+        },
+    }
+
+
+def add_documents(
+    collection,
+    docs: list[dict],
+    existing_ids: set[str],
+    batch_size: int = ADD_BATCH_SIZE,
+) -> int:
+    """Embed and add new docs in batches. Returns the number of documents added."""
+    new_docs = [d for d in docs if d["id"] not in existing_ids]
+    if not new_docs:
+        return 0
+
+    added = 0
+    for i in range(0, len(new_docs), batch_size):
+        batch = new_docs[i : i + batch_size]
+        collection.add(
+            ids=[d["id"] for d in batch],
+            documents=[d["text"] for d in batch],
+            metadatas=[d["metadata"] for d in batch],
+        )
+        existing_ids.update(d["id"] for d in batch)
+        added += len(batch)
+
+    return added
+
+
+def index_pdf_directory(
+    collection,
+    directory: Path,
+    existing_ids: set[str],
+    batch_size: int = ADD_BATCH_SIZE,
+) -> tuple[int, int, int]:
+    """Index PDFs one file at a time. Returns (chunks_seen, chunks_added, pdfs_processed)."""
+    if not directory.exists():
+        print(f"  Skipping {directory} (not found)")
+        return 0, 0, 0
+
+    pdf_files = sorted(directory.glob("*.pdf"))
+    print(f"  {directory.relative_to(DATA_DIR)}: {len(pdf_files)} PDFs")
+
+    chunks_seen = 0
+    chunks_added = 0
+    pdfs_processed = 0
+
+    for i, pdf_path in enumerate(pdf_files, start=1):
+        docs = docs_from_pdf(pdf_path)
+        if not docs:
+            continue
+
+        pdfs_processed += 1
+        chunks_seen += len(docs)
+        added = add_documents(collection, docs, existing_ids, batch_size)
+        chunks_added += added
+
+        if added:
+            print(f"    [{i}/{len(pdf_files)}] {pdf_path.name}: +{added} chunk(s)")
+
+        del docs
+        if i % 100 == 0:
+            gc.collect()
+
+    return chunks_seen, chunks_added, pdfs_processed
+
+
+def index_flow_documents(
+    collection,
+    existing_ids: set[str],
+    batch_size: int = ADD_BATCH_SIZE,
+) -> tuple[int, int]:
+    """Index flow example text files one at a time. Returns (files_seen, files_added)."""
+    if not FLOWS_DIR.exists():
+        print(f"  Skipping {FLOWS_DIR} (not found)")
+        return 0, 0
+
+    files_seen = 0
+    files_added = 0
 
     for flow_dir in sorted(FLOWS_DIR.rglob("*")):
         if not flow_dir.is_dir():
             continue
         for txt_path in sorted(flow_dir.glob("*.txt")):
-            text = txt_path.read_text(encoding="utf-8", errors="ignore").strip()
-            if not text:
+            doc = doc_from_flow(txt_path, flow_dir)
+            if doc is None:
                 continue
-            rel_path = Path("flows") / txt_path.relative_to(FLOWS_DIR)
-            docs.append({
-                "id": f"flow::{rel_path}",
-                "text": text,
-                "metadata": {
-                    "source": "flow_example",
-                    "flow": flow_dir.name,
-                    "file": str(rel_path),
-                },
-            })
 
-    return docs
+            files_seen += 1
+            added = add_documents(collection, [doc], existing_ids, batch_size)
+            if added:
+                files_added += added
+                print(f"    flow {txt_path.relative_to(FLOWS_DIR)}: +{added}")
+
+    return files_seen, files_added
 
 
 def build_index(reset: bool = False) -> None:
@@ -194,17 +268,9 @@ def build_index(reset: bool = False) -> None:
     print(f"Data directory  : {DATA_DIR}")
     print(f"ChromaDB path   : {CHROMA_DIR}")
     print(f"Embedding model : {EMBED_MODEL}")
-    print(f"Device          : {device}\n")
+    print(f"Device          : {device}")
+    print(f"Add batch size  : {ADD_BATCH_SIZE}\n")
 
-    # --- Stage 1: PDF extraction + chunking (no torch model yet) ---
-    t0 = time.time()
-    print("Scanning source directories …")
-    all_docs = collect_documents()
-    t_extract = time.time() - t0
-    print(f"Total chunks found: {len(all_docs)}")
-    print(f"  ⏱ Extraction + chunking: {t_extract:.1f}s")
-
-    # --- Stage 2: Load model + Chroma, then embed/index ---
     embed_fn = LocalEmbeddingFunction(EMBED_MODEL, device=device)
     client = chromadb.PersistentClient(path=str(CHROMA_DIR))
 
@@ -219,32 +285,30 @@ def build_index(reset: bool = False) -> None:
     )
 
     existing_ids = set(collection.get(include=[])["ids"])
-    print(f"Existing documents in collection: {len(existing_ids)}")
+    print(f"Existing documents in collection: {len(existing_ids)}\n")
 
-    new_docs = [d for d in all_docs if d["id"] not in existing_ids]
-    print(f"\nNew documents to index: {len(new_docs)}")
+    t0 = time.time()
+    print("Indexing IRS form PDFs (streaming, one file at a time) …")
+    pdf_chunks_seen, pdf_chunks_added, pdfs_processed = index_pdf_directory(
+        collection, IRS_FORMS_DIR, existing_ids
+    )
 
-    if not new_docs:
+    print("\nIndexing flow examples …")
+    flow_files_seen, flow_files_added = index_flow_documents(collection, existing_ids)
+
+    t_total = time.time() - t0
+    total_added = pdf_chunks_added + flow_files_added
+
+    print(f"\nPDFs processed     : {pdfs_processed}")
+    print(f"PDF chunks seen    : {pdf_chunks_seen}")
+    print(f"Flow files seen    : {flow_files_seen}")
+    print(f"New documents added: {total_added}")
+    print(f"  ⏱ Indexing time  : {t_total:.1f}s")
+
+    if total_added == 0:
         print("Nothing to index. Run with --reset to force re-indexing.")
-        return
-
-    t1 = time.time()
-    total_batches = (len(new_docs) + BATCH_SIZE - 1) // BATCH_SIZE
-    for i in range(0, len(new_docs), BATCH_SIZE):
-        batch = new_docs[i : i + BATCH_SIZE]
-        batch_num = i // BATCH_SIZE + 1
-        print(f"  Batch {batch_num}/{total_batches} — {len(batch)} chunks …", end=" ", flush=True)
-        collection.add(
-            ids=[d["id"] for d in batch],
-            documents=[d["text"] for d in batch],
-            metadatas=[d["metadata"] for d in batch],
-        )
-        print("done")
-
-    t_embed = time.time() - t1
-    print(f"\n  ⏱ Embedding + indexing: {t_embed:.1f}s")
-    print(f"\nIndexed {len(new_docs)} documents in {t_extract + t_embed:.1f}s")
-    print(f"Collection total: {collection.count()} documents")
+    else:
+        print(f"Collection total   : {collection.count()} documents")
 
 
 if __name__ == "__main__":
