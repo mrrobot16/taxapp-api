@@ -16,9 +16,11 @@ API_DIR = APP_DIR.parent
 REPO_ROOT = API_DIR.parent
 
 DATA_DIR = API_DIR / "data"
+SCRIPTS_DIR = API_DIR / "scripts"
 CHROMA_DIR = DATA_DIR / "chroma_db"
 IRS_FORMS_DIR = DATA_DIR / "irs_forms"
-FLOWS_DIR = DATA_DIR / "flows"
+# FLOWS_DIR = DATA_DIR / "flows"
+FLOWS_DIR = SCRIPTS_DIR / "flows"
 
 load_dotenv(REPO_ROOT / ".env")
 load_dotenv(API_DIR / ".env")
