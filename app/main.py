@@ -26,7 +26,6 @@ logger = logging.getLogger("taxapp.api")
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     app.state.collection = warmup_collection()
-    app.state.collection = None
     if app.state.collection is None:
         logger.warning("Knowledge base not indexed yet; /api/chat will return 503.")
 
